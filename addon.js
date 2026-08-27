@@ -122,7 +122,13 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
 
         log.error(`Unexpected error (${elapsed}ms): ${error.message}`);
-        return { streams: [] };
+        return { 
+            streams: [{
+                name: 'Dizibox Err',
+                title: `🚨 Hata: ${error.message}`,
+                externalUrl: 'https://dizibox.now'
+            }]
+        };
     }
 });
 
