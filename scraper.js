@@ -20,43 +20,57 @@ const log = createLogger('Scraper');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 /**
- * Fetch a URL with Referer header and proxy rotation.
+ * Fetch a URL with Referer header and proxy fallback.
  */
-async function fetchWithReferer(url, referer = 'https://dizibox.now/', maxRetries = 3) {
+async function fetchWithReferer(url, referer = 'https://dizibox.now/', maxRetries = 2) {
+    const fetchOptions = {
+        headers: {
+            'User-Agent': UA,
+            'Accept': 'text/html,*/*',
+            'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
+            'Referer': referer,
+            'Origin': 'https://dizibox.now',
+            'Sec-Fetch-Mode': 'navigate',
+        },
+        signal: AbortSignal.timeout(8000),
+    };
+
+    // Phase 1: Direct fetch
+    try {
+        const r = await fetch(url, fetchOptions);
+        if (r.status !== 403 && r.status !== 429 && r.status !== 503 && r.ok) {
+            return await r.text();
+        }
+        log.warn(`Direct fetch failed (HTTP ${r.status}), falling back to proxy...`);
+    } catch (err) {
+        log.warn(`Direct fetch failed (${err.message}), falling back to proxy...`);
+    }
+
+    // Phase 2: Proxy fetch
     let lastErr;
+    fetchOptions.signal = AbortSignal.timeout(10000);
     for (let i = 0; i < maxRetries; i++) {
         const proxy = await getWorkingProxy();
         if (!proxy) continue;
 
         try {
-            const dispatcher = createProxyAgent(proxy);
-            const r = await fetch(url, {
-                headers: {
-                    'User-Agent': UA,
-                    'Accept': 'text/html,*/*',
-                    'Accept-Language': 'tr-TR,tr;q=0.9,en;q=0.8',
-                    'Referer': referer,
-                    'Origin': 'https://dizibox.now',
-                    'Sec-Fetch-Mode': 'navigate',
-                },
-                dispatcher,
-                signal: AbortSignal.timeout(15000),
-            });
+            fetchOptions.dispatcher = createProxyAgent(proxy);
+            const r = await fetch(url, fetchOptions);
+            
             if (r.status === 403 || r.status === 429 || r.status === 503) {
                 markProxyBad(proxy);
-                throw new Error(`IP Blocked or Rate Limited: HTTP ${r.status}`);
+                throw new Error(`IP Blocked: HTTP ${r.status}`);
             }
-            if (!r.ok) {
-                throw new Error(`HTTP ${r.status}`);
-            }
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            
             return await r.text();
         } catch (err) {
             lastErr = err;
             markProxyBad(proxy);
-            log.warn(`Fetch attempt ${i + 1} failed for ${url} via ${proxy.address}: ${err.message}`);
+            log.warn(`Proxy fetch failed (${proxy.address}): ${err.message}`);
         }
     }
-    throw new NetworkError(`Failed to fetch ${url} after ${maxRetries} retries: ${lastErr?.message}`);
+    throw new NetworkError(`Failed to fetch ${url} (Direct & Proxy failed): ${lastErr?.message}`);
 }
 
 /**

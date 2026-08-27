@@ -32,8 +32,23 @@ function normalize(str) {
         .trim();
 }
 
-/** Fetch a URL with proxy rotation and retries */
-async function fetchPage(url, extraHeaders = {}, maxRetries = 3) {
+/** Fetch a URL with fallback to proxy */
+async function fetchPage(url, extraHeaders = {}, maxRetries = 2) {
+    // Phase 1: Direct fetch
+    try {
+        const r = await fetch(url, {
+            headers: { ...DEFAULT_HEADERS, ...extraHeaders },
+            signal: AbortSignal.timeout(8000)
+        });
+        if (r.status !== 403 && r.status !== 429 && r.status !== 503 && r.ok) {
+            return await r.text();
+        }
+        log.warn(`Direct fetch failed (HTTP ${r.status}), falling back to proxy...`);
+    } catch (err) {
+        log.warn(`Direct fetch failed (${err.message}), falling back to proxy...`);
+    }
+
+    // Phase 2: Proxy fetch
     let lastErr;
     for (let i = 0; i < maxRetries; i++) {
         const proxy = await getWorkingProxy();
@@ -44,25 +59,23 @@ async function fetchPage(url, extraHeaders = {}, maxRetries = 3) {
             const r = await fetch(url, {
                 headers: { ...DEFAULT_HEADERS, ...extraHeaders },
                 dispatcher,
-                signal: AbortSignal.timeout(15000)
+                signal: AbortSignal.timeout(10000)
             });
             
             if (r.status === 403 || r.status === 429 || r.status === 503) {
                 markProxyBad(proxy);
-                throw new Error(`IP Blocked or Rate Limited: HTTP ${r.status}`);
+                throw new Error(`IP Blocked: HTTP ${r.status}`);
             }
-            if (!r.ok) {
-                throw new Error(`HTTP ${r.status}`);
-            }
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
             
             return await r.text();
         } catch (err) {
             lastErr = err;
             markProxyBad(proxy);
-            log.warn(`Fetch attempt ${i + 1} failed for ${url} via ${proxy.address}: ${err.message}`);
+            log.warn(`Proxy fetch failed (${proxy.address}): ${err.message}`);
         }
     }
-    throw new NetworkError(`Failed to fetch ${url} after ${maxRetries} retries: ${lastErr?.message}`);
+    throw new NetworkError(`Failed to fetch ${url} (Direct & Proxy failed): ${lastErr?.message}`);
 }
 
 /**
