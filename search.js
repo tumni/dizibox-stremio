@@ -9,6 +9,7 @@ const { fetch } = require('undici');
 const cheerio = require('cheerio');
 const { createLogger } = require('./logger');
 const { ContentNotFoundError, NetworkError } = require('./errors');
+const { getProxyDispatcher } = require('./proxy');
 
 const log = createLogger('Search');
 
@@ -31,19 +32,30 @@ function normalize(str) {
         .trim();
 }
 
-/** Fetch a URL with timeout */
-async function fetchPage(url, extraHeaders = {}) {
-    try {
-        const r = await fetch(url, {
-            headers: { ...DEFAULT_HEADERS, ...extraHeaders },
-            signal: AbortSignal.timeout(15000),
-        });
-        if (!r.ok) throw new NetworkError(`HTTP ${r.status} for ${url}`);
-        return r.text();
-    } catch (err) {
-        if (err.name === 'TimeoutError') throw new NetworkError(`Timeout fetching ${url}`);
-        throw err;
+/** Fetch a URL with proxy rotation and retries */
+async function fetchPage(url, extraHeaders = {}, maxRetries = 3) {
+    let lastErr;
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            const dispatcher = await getProxyDispatcher();
+            const r = await fetch(url, {
+                headers: { ...DEFAULT_HEADERS, ...extraHeaders },
+                dispatcher,
+                signal: AbortSignal.timeout(15000)
+            });
+            
+            if (r.status === 403 || r.status === 429 || r.status === 503) {
+                throw new Error(`IP Blocked or Rate Limited: HTTP ${r.status}`);
+            }
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            
+            return await r.text();
+        } catch (err) {
+            lastErr = err;
+            log.warn(`Fetch attempt ${i + 1} failed for ${url}: ${err.message}`);
+        }
     }
+    throw new NetworkError(`Failed to fetch ${url} after ${maxRetries} retries: ${lastErr?.message}`);
 }
 
 /**
