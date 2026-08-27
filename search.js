@@ -9,7 +9,7 @@ const { fetch } = require('undici');
 const cheerio = require('cheerio');
 const { createLogger } = require('./logger');
 const { ContentNotFoundError, NetworkError } = require('./errors');
-const { getProxyDispatcher } = require('./proxy');
+const { getWorkingProxy, createProxyAgent, markProxyBad } = require('./proxy');
 
 const log = createLogger('Search');
 
@@ -36,8 +36,11 @@ function normalize(str) {
 async function fetchPage(url, extraHeaders = {}, maxRetries = 3) {
     let lastErr;
     for (let i = 0; i < maxRetries; i++) {
+        const proxy = await getWorkingProxy();
+        if (!proxy) continue;
+
         try {
-            const dispatcher = await getProxyDispatcher();
+            const dispatcher = createProxyAgent(proxy);
             const r = await fetch(url, {
                 headers: { ...DEFAULT_HEADERS, ...extraHeaders },
                 dispatcher,
@@ -45,14 +48,18 @@ async function fetchPage(url, extraHeaders = {}, maxRetries = 3) {
             });
             
             if (r.status === 403 || r.status === 429 || r.status === 503) {
+                markProxyBad(proxy);
                 throw new Error(`IP Blocked or Rate Limited: HTTP ${r.status}`);
             }
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            if (!r.ok) {
+                throw new Error(`HTTP ${r.status}`);
+            }
             
             return await r.text();
         } catch (err) {
             lastErr = err;
-            log.warn(`Fetch attempt ${i + 1} failed for ${url}: ${err.message}`);
+            markProxyBad(proxy);
+            log.warn(`Fetch attempt ${i + 1} failed for ${url} via ${proxy.address}: ${err.message}`);
         }
     }
     throw new NetworkError(`Failed to fetch ${url} after ${maxRetries} retries: ${lastErr?.message}`);
