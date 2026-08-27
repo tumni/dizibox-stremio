@@ -1,0 +1,17 @@
+{
+  "name": "dizibox-stremio",
+  "version": "1.0.0",
+  "description": "Dizibox Stremio Addon - Türkçe altyazılı yabancı dizi/film",
+  "main": "addon.js",
+  "scripts": {
+    "start": "node addon.js",
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "stremio-addon-sdk": "^1.6.10",
+    "undici": "^6.0.0"
+  }
+}
